@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -18,6 +19,27 @@ from .const import (
     SAAS_CODE,
 )
 
+# Substrings that identify an expired/invalid session in server messages.
+# The upstream code matched only the literal "token invalid"; if the cloud
+# phrases the error differently the integration never re-logs in and stays
+# broken until Home Assistant is restarted. Matching broadly keeps the
+# session self-healing.
+_TOKEN_ERROR_MARKERS = (
+    "token invalid",
+    "invalid token",
+    "token expired",
+    "token error",
+    "token fail",
+    "expire",
+    "please log in",
+    "please login",
+    "not logged in",
+    "login expired",
+    "session expired",
+    "unauthorized",
+    "unauthorised",
+)
+
 
 class XHouseApiError(Exception):
     pass
@@ -32,6 +54,10 @@ class XHouseApi:
         self._session = session
         self.user_id: str | None = None
         self.token: str | None = None
+
+    @property
+    def logged_in(self) -> bool:
+        return bool(self.token and self.user_id)
 
     def _generate_signature(self) -> tuple[str, str]:
         timestamp = str(int(time.time()))
@@ -75,9 +101,25 @@ class XHouseApi:
                 url, headers=headers, data=body_string, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
                 resp.raise_for_status()
-                return await resp.json()
+                # The XHouse cloud replies with a non-standard
+                # "Content-Type: text/json;charset=utf-8" header.
+                # aiohttp's resp.json() only accepts "application/json" by
+                # default and raises ContentTypeError on anything else, so
+                # pass content_type=None to skip the MIME check.
+                return await resp.json(content_type=None)
         except aiohttp.ClientError as err:
             raise XHouseApiError(f"API request to {endpoint} failed: {err}") from err
+        except asyncio.TimeoutError as err:
+            # Plain asyncio.TimeoutError is not an aiohttp.ClientError
+            # subclass on every aiohttp version; wrap it so both the
+            # coordinator and command handlers deal with one exception type.
+            raise XHouseApiError(f"API request to {endpoint} timed out") from err
+        except ValueError as err:
+            # json.JSONDecodeError: body was not valid JSON (e.g. an HTML
+            # error page). Wrap it so callers report it cleanly.
+            raise XHouseApiError(
+                f"API request to {endpoint} returned invalid JSON: {err}"
+            ) from err
 
     async def login(self, email: str, password: str) -> bool:
         body = {
@@ -141,7 +183,7 @@ class XHouseApi:
 
     def _check_token_error(self, data: dict) -> None:
         msg = (data or {}).get("msg", "").lower()
-        if "token invalid" in msg:
+        if any(marker in msg for marker in _TOKEN_ERROR_MARKERS):
             self.token = None
             self.user_id = None
-            raise XHouseAuthError("Token invalid")
+            raise XHouseAuthError(f"Session rejected by server: {msg or 'unknown auth error'}")
