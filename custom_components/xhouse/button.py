@@ -48,15 +48,14 @@ class XHousePedestrianButton(XHouseEntity, ButtonEntity):
             LOGGER.error("No bleCode for gate device %s", self._device_id)
             return
         hex_value = f"3A{ble_code}0404"
-        api = self.coordinator.api
-        body = {
-            "deviceId": self._device_id,
-            "userId": int(api.user_id),
-            "propertyValue": {"type": "SET_MENU", "object": {"value": hex_value}},
-            "action": "",
-        }
         try:
-            await api.send_command(body)
+            # Coordinator helper restores the session and retries once
+            # after a re-login instead of crashing on a stale token.
+            await self.coordinator.send_command(
+                self._device_id,
+                {"type": "SET_MENU", "object": {"value": hex_value}},
+                "",
+            )
         except XHouseApiError as err:
             LOGGER.error("Failed to send pedestrian command for %s: %s", self.entity_id, err)
             return
