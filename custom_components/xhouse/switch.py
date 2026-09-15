@@ -66,15 +66,14 @@ class XHouseSwitch(XHouseEntity, SwitchEntity):
         await self._send_command(0)
 
     async def _send_command(self, value: int) -> None:
-        api = self.coordinator.api
-        body = {
-            "deviceId": self._device_id,
-            "userId": int(api.user_id),
-            "propertyValue": {self._property_key: value},
-            "action": "On" if value else "Off",
-        }
         try:
-            await api.send_command(body)
+            # Coordinator helper restores the session and retries once
+            # after a re-login instead of crashing on a stale token.
+            await self.coordinator.send_command(
+                self._device_id,
+                {self._property_key: value},
+                "On" if value else "Off",
+            )
         except XHouseApiError as err:
             LOGGER.error("Failed to control switch %s: %s", self.entity_id, err)
             return
