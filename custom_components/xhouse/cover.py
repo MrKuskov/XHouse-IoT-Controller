@@ -86,15 +86,14 @@ class XHouseKnownCover(XHouseEntity, CoverEntity):
         await self._send_switch_command(0)
 
     async def _send_switch_command(self, value: int) -> None:
-        api = self.coordinator.api
-        body = {
-            "deviceId": self._device_id,
-            "userId": int(api.user_id),
-            "propertyValue": {"Switch_1": value},
-            "action": "On" if value else "Off",
-        }
         try:
-            await api.send_command(body)
+            # Coordinator helper restores the session and retries once
+            # after a re-login instead of crashing on a stale token.
+            await self.coordinator.send_command(
+                self._device_id,
+                {"Switch_1": value},
+                "On" if value else "Off",
+            )
         except XHouseApiError as err:
             LOGGER.error("Failed to control cover %s: %s", self.entity_id, err)
             return
@@ -195,15 +194,14 @@ class XHouseGateCover(XHouseEntity, CoverEntity):
             LOGGER.error("No bleCode for gate device %s", self._device_id)
             return
         hex_value = f"3A{ble_code}04{action_code}"
-        api = self.coordinator.api
-        body = {
-            "deviceId": self._device_id,
-            "userId": int(api.user_id),
-            "propertyValue": {"type": "SET_MENU", "object": {"value": hex_value}},
-            "action": "",
-        }
         try:
-            await api.send_command(body)
+            # Coordinator helper restores the session and retries once
+            # after a re-login instead of crashing on a stale token.
+            await self.coordinator.send_command(
+                self._device_id,
+                {"type": "SET_MENU", "object": {"value": hex_value}},
+                "",
+            )
         except XHouseApiError as err:
             LOGGER.error("Failed to control gate cover %s: %s", self.entity_id, err)
             return
