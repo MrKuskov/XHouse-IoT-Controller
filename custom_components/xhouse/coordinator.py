@@ -114,6 +114,36 @@ class XHouseCoordinator(DataUpdateCoordinator[dict[int, XHouseDeviceData]]):
         except Exception:  # noqa: BLE001
             LOGGER.exception("Fast-poll loop crashed")
 
+    async def send_command(
+        self,
+        device_id: int,
+        property_value: dict[str, Any],
+        action: str,
+    ) -> None:
+        """Send a control command, restoring the session first if needed.
+
+        Used by the switch/cover/button entities. Without this a single
+        expired token used to wedge command handling (TypeError on the
+        missing userId, no re-login in the command path) until the next
+        Home Assistant restart.
+        """
+        if not self.api.logged_in:
+            LOGGER.info("XHouse session missing, logging in before command")
+            await self.api.login(self._email, self._password)
+        body = {
+            "deviceId": device_id,
+            "userId": int(self.api.user_id),
+            "propertyValue": property_value,
+            "action": action,
+        }
+        try:
+            await self.api.send_command(body)
+        except XHouseAuthError:
+            LOGGER.info("XHouse session rejected during command, retrying after re-login")
+            await self.api.login(self._email, self._password)
+            body["userId"] = int(self.api.user_id)
+            await self.api.send_command(body)
+
     async def _async_update_data(self) -> dict[int, XHouseDeviceData]:
         try:
             return await self._fetch_all()
