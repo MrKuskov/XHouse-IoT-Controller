@@ -55,19 +55,36 @@ After setup, click **Configure** on the integration to adjust:
 ## Screenshot
 <img width="989" height="271" alt="image" src="https://github.com/user-attachments/assets/6e97540f-8d7e-4aaa-ad4b-ceabdecd9298" />
 
-XHouse IoT Controller — патч от «зависания» до перезагрузки
-Версия интеграции: 1.2.1 (все правки совместимы именно с ней).
+## Troubleshooting: cloud API quirks (patched in this fork)
 
-Что исправлено
-Ошибка Attempt to decode JSON with unexpected mimetype: text/json;charset=utf-8
-Сервер XHouse отдаёт JSON с нестандартным заголовком Content-Type: text/json;charset=utf-8.
-aiohttp по умолчанию принимает только application/json и рвет каждый второй ответ.
-→ resp.json(content_type=None) — проверка MIME отключена.
-Зависание «не реагирует на команды до перезагрузки»
-Причины было две:
-Каждый упавший опрос переводит все сущности в «недоступно», HA блокирует нажатия,
-а опросы продолжали падать из-за пункта 1.
-Токен сессии распознавался только по дословной фразе "token invalid". Любая другая
+### JSON responses with a non-standard `Content-Type`
+
+The XHouse cloud (`iemp.giigleiot.net`) returns valid JSON but with a
+non-standard `Content-Type: text/json;charset=utf-8` header. `aiohttp`'s
+`resp.json()` only accepts `application/json` by default and raises
+`ContentTypeError` (`Attempt to decode JSON with unexpected mimetype`) on
+every response. Each failed poll marks the coordinator as failed, which
+makes **all entities unavailable and blocks every command until Home
+Assistant is restarted**.
+
+**Fix:** `await resp.json(content_type=None)` — decode JSON regardless of
+the reported MIME type.
+
+### Dead session with no re-login
+
+The integration only recognized an expired token by the literal message
+`"token invalid"`. Any other server wording ("token expired",
+"please login", etc.) meant the integration never re-logged in and stayed
+broken until restart. On top of that, the command path called
+`int(api.user_id)` after the user id had already been cleared, raising an
+unhandled `TypeError`.
+
+**Fix:** session errors are now detected via a set of markers; commands go
+through a coordinator helper that re-logins first and retries the command
+once after re-login, so the integration recovers by itself.
+
+Patch is compatible with integration version 1.2.1.
+
 формулировка сервера = интеграция никогда не перелогинивается. Плюс при нажатии кнопки
 код обращался к int(api.user_id) с уже очищенным user_id → необработанный TypeError.
 → Теперь: широкий набор признаков «сессия протухла», автоперелогин перед командой,
